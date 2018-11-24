@@ -1,0 +1,100 @@
+{
+  "name": "SemanticModel",
+  "compatibilityLevel": 1400,
+  "model": {
+    "culture": "fr-FR",
+    "dataSources": [
+      {
+        "type": "structured",
+        "name": "AzureBlobs/https://lakegen2 blob core windows net/",
+        "connectionDetails": {
+          "protocol": "azure-blobs",
+          "address": {
+            "account": "lakegen2",
+            "domain": "blob.core.windows.net"
+          },
+          "authentication": null,
+          "query": null
+        },
+        "options": {},
+        "credential": {
+          "AuthenticationKind": "Key"
+        }
+      }
+    ],
+    "tables": [
+      {
+        "name": "Meteo",
+        "columns": [
+          {
+            "name": "Latitude",
+            "dataType": "string",
+            "sourceColumn": "Latitude"
+          },
+          {
+            "name": "Longitude",
+            "dataType": "string",
+            "sourceColumn": "Longitude"
+          },
+          {
+            "name": "Humidity",
+            "dataType": "string",
+            "sourceColumn": "Humidity"
+          },
+          {
+            "name": "Pressure",
+            "dataType": "string",
+            "sourceColumn": "Pressure"
+          },
+          {
+            "name": "Temperature",
+            "dataType": "string",
+            "sourceColumn": "Temperature"
+          },
+          {
+            "name": "City",
+            "dataType": "string",
+            "sourceColumn": "City"
+          },
+          {
+            "name": "Country",
+            "dataType": "string",
+            "sourceColumn": "Country"
+          },
+          {
+            "name": "ExecutionTime",
+            "dataType": "dateTime",
+            "sourceColumn": "ExecutionTime"
+          }
+        ],
+        "partitions": [
+          {
+            "name": "Partition",
+            "dataView": "full",
+            "source": {
+              "type": "m",
+              "expression": [
+                "let",
+                "    Source = #\"AzureBlobs/https://lakegen2 blob core windows net/\",",
+                "    lake1 = Source{[Name=\"lake\"]}[Data],",
+                "    #\"https://lakegen2 blob core windows net/lake/_Meteo csv\" = lake1{[#\"Folder Path\"=\"https://lakegen2.blob.core.windows.net/lake/\",Name=\"Meteo.csv\"]}[Content],",
+                "    #\"CSV importé\" = Csv.Document(#\"https://lakegen2 blob core windows net/lake/_Meteo csv\",[Delimiter=\",\", Columns=8, Encoding=1252, QuoteStyle=QuoteStyle.None]),",
+                "    #\"En-têtes promus\" = Table.PromoteHeaders(#\"CSV importé\", [PromoteAllScalars=true]),",
+                "    #\"Type modifié\" = Table.TransformColumnTypes(#\"En-têtes promus\",{{\"Latitude\", type text}, {\"Longitude\", type text}, {\"Humidity\", type text}, {\"Pressure\", type text}, {\"Temperature\", type text}, {\"City\", type text}, {\"Country\", type text}, {\"ExecutionTime\", type datetime}})",
+                "in",
+                "    #\"Type modifié\""
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "annotations": [
+      {
+        "name": "ClientCompatibilityLevel",
+        "value": "500"
+      }
+    ]
+  },
+  "id": "SemanticModel"
+}
