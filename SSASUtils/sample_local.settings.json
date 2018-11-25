@@ -5,8 +5,9 @@
     "AzureWebJobsDashboard": "UseDevelopmentStorage=true"
   },
   "AzureAd": {
-    "ResourceURI": "https://management.core.windows.net",
-    "Authority": "https://login.microsoftonline.com/18907841-8c13-49e8-9fc3-7f8b8fcbc2f5",
+    "ResourceURI": "https://*.asazure.windows.net",
+    "ResourceManagementURI": "https://management.core.windows.net",
+    "Authority": "https://login.windows.net/18907841-8c13-49e8-9fc3-7f8b8fcbc2f5",
     "ClientId": "a6aad1d2-ecd0-47b1-8efd-91ab9d2abaa4",
     "AppSecret": "pN21EifUW5uA1uLGdOvpYRL8kOgbw0E6GlWPsq4j1PA="
 
