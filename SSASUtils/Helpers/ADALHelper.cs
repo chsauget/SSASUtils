@@ -8,7 +8,7 @@ namespace SSASUtils.Helpers
     public static class ADALHelper
     {
         //Retrieve the ADAL Token 
-        public static TokenCredentials GetSSASToken(string resourceURI, string authority, string clientId,  string AppSecret)
+        public static string GetSSASToken(string resourceURI, string authority, string clientId,  string AppSecret)
         {
             ClientCredential credential = new ClientCredential(clientId, AppSecret);
             // Authenticate using created credentials
@@ -23,7 +23,7 @@ namespace SSASUtils.Helpers
             }
             else
             {
-                return new TokenCredentials(authenticationResult.AccessToken, "Bearer");
+                return authenticationResult.AccessToken;
             }
         }
 
