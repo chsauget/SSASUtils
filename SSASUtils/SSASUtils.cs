@@ -1,6 +1,5 @@
 using System.Net;
 using System.Net.Http;
-using System.Threading.Tasks;
 using Microsoft.Azure.WebJobs;
 using Microsoft.Azure.WebJobs.Extensions.Http;
 using Microsoft.Azure.WebJobs.Host;
@@ -9,6 +8,7 @@ using System;
 using System.Linq;
 using Microsoft.Rest;
 using Microsoft.Extensions.Logging;
+using Microsoft.WindowsAzure.Storage.Blob;
 
 namespace SSASUtils
 {
@@ -22,11 +22,22 @@ namespace SSASUtils
     using System.Collections.Generic;
     using Newtonsoft.Json;
     using System.Text;
+    using System.IO;
+    using System.Threading.Tasks;
 
     public static class SSASUtils
     {
-        private static readonly AppSettings Settings =
-            ServiceProviderConfiguration.GetServiceProvider().GetService<AppSettings>();
+        private static AppSettings _Settings;
+
+        private static AppSettings Settings
+        {
+            get
+            {
+                if (_Settings is null)
+                    _Settings = ServiceProviderConfiguration.GetServiceProvider().GetService<AppSettings>();
+                return _Settings;
+            }
+        }
 
         private static string _tokenCredentials;
         public static string TokenCredentials
@@ -48,6 +59,49 @@ namespace SSASUtils
                 return _tokenCredentials;
             }
         }
+
+
+        [FunctionName("ProcessModelFromBlob")]
+        public static async void RunAsync([BlobTrigger("azurefunctiontrigger/ProcessModelFromBlob/{name}")] CloudBlockBlob myBlob, string name, ILogger log, Microsoft.Azure.WebJobs.ExecutionContext context)
+        {
+            ConfigPath.Path = Path.Combine(context.FunctionAppDirectory, "ConfigFiles");
+            try
+            {
+                // Read blob ==> Json              
+                using (StreamReader reader = new StreamReader(myBlob.OpenRead()))
+                {
+                    string blobcontent;
+                    blobcontent = reader.ReadToEnd();
+                    List<ProcessModel> processQueryList = JsonConvert.DeserializeObject<List<ProcessModel>>(blobcontent);
+                    List<ProcessResult> result = await ProcessModel(processQueryList, log);
+                    string messageResult = JsonConvert.SerializeObject(result, Formatting.Indented);
+                    log.LogInformation(messageResult);
+                    myBlob.DeleteIfExists();
+                }
+            }
+            catch (Exception ex)
+            {
+                log.LogError(ex.Message);
+            }
+        }
+
+        [FunctionName("ProcessModel")]
+        public static async Task<HttpResponseMessage> RunProcessModel([HttpTrigger(AuthorizationLevel.Function, "post", Route = null)]HttpRequestMessage req, ILogger log, Microsoft.Azure.WebJobs.ExecutionContext context)
+        {
+            log.LogInformation("C# HTTP trigger function processed a request.");
+            ConfigPath.Path = Path.Combine(context.FunctionAppDirectory, "ConfigFiles");
+
+            List<ProcessModel> processQueryList = await req.Content.ReadAsAsync<List<ProcessModel>>();
+
+            List<ProcessResult> result = await ProcessModel(processQueryList, log);
+            string messageResult = JsonConvert.SerializeObject(result, Formatting.Indented);
+
+            if (result.Where(r => r.errorMessage != "" && r.errorMessage != null).Count() == 0)
+                return req.CreateResponse(HttpStatusCode.OK, messageResult);
+            else
+                return req.CreateResponse(HttpStatusCode.InternalServerError, messageResult);
+        }
+
         // Request input format exemple :
         //===============================
         //[
@@ -81,15 +135,11 @@ namespace SSASUtils
         //    }
         //    }
         //]
-        [FunctionName("ProcessModel")]
-        public static async Task<HttpResponseMessage> RunProcessModel([HttpTrigger(AuthorizationLevel.Function,"post", Route = null)]HttpRequestMessage req, ILogger log)
+        private static async Task<List<ProcessResult>> ProcessModel(List<ProcessModel> processQueryList, ILogger log)
         {
-            log.LogInformation("C# HTTP trigger function processed a request.");
-            bool IsOneFailed = false;
-            bool wait = true;
-            List<ProcessModel> processQueryList = await req.Content.ReadAsAsync<List<ProcessModel>>();
             List<ProcessState> executionList = new List<ProcessState>();
             List<SyncState> syncList = new List<SyncState>();
+            bool wait = true;
 
             try
             {
@@ -97,13 +147,13 @@ namespace SSASUtils
                 {
                     if (processQuery.SyncReplicas)
                     {
-                        await configureProcessingServer("ReadOnly", processQuery.resourceGroup, processQuery.serverUrl.Substring(processQuery.serverUrl.LastIndexOf("/")+1), log);
+                        await configureProcessingServer("ReadOnly", processQuery.resourceGroup, processQuery.serverUrl.Substring(processQuery.serverUrl.LastIndexOf("/") + 1), log);
                     }
                     var processUri = await RunProcessModelAsync(processQuery, log);
-                    executionList.Add(new ProcessState { wait = true, processUri= processUri, conflic=false, hasError=false, process = processQuery });
+                    executionList.Add(new ProcessState { wait = true, processUri = processUri, conflic = false, hasError = false, process = processQuery });
                 }
-                
-                foreach(ProcessState process in executionList)
+
+                foreach (ProcessState process in executionList)
                 {
                     Uri processUri = process.processUri;
 
@@ -157,10 +207,6 @@ namespace SSASUtils
                             proc.hasError = true;
                             proc.errorMessage = string.Format("{0} - {1} Cube Processing Failed", proc.process.serverUrl, output.Value);
                             log.LogError(proc.errorMessage);
-                            //UpdateMessage(logIdFinance, 30, "Process Failed", 0);
-
-                            IsOneFailed = true;
-
                             if (proc.process.SyncReplicas)
                             {
                                 await configureProcessingServer("All", proc.process.resourceGroup, proc.process.serverUrl.Substring(proc.process.serverUrl.LastIndexOf("/") + 1), log);
@@ -199,7 +245,6 @@ namespace SSASUtils
             {
                 string message = e.Message.Substring(1, e.Message.Length <= 500 ? e.Message.Length - 1 : 500);
                 log.LogError($"Exception: {message} - {e.Source} - {e.InnerException}");
-                IsOneFailed = true;
             }
 
             List<ProcessResult> result = new List<ProcessResult>();
@@ -213,18 +258,14 @@ namespace SSASUtils
                 {
                     var syncState = syncList.First(s => s.process == p.process);
                     if (syncState.hasError)
-                        result.Add(new ProcessResult { serverUrl = p.process.serverUrl, modelName = p.process.modelName, State = "Succeded", syncState="Synchronisation Error", errorMessage=syncState.errorMessage });
+                        result.Add(new ProcessResult { serverUrl = p.process.serverUrl, modelName = p.process.modelName, State = "Succeded", syncState = "Synchronisation Error", errorMessage = syncState.errorMessage });
                     else
                         result.Add(new ProcessResult { serverUrl = p.process.serverUrl, modelName = p.process.modelName, State = "Succeded", syncState = "Synchronisation Succeded" });
                 }
                 else
                     result.Add(new ProcessResult { serverUrl = p.process.serverUrl, modelName = p.process.modelName, State = "Succeded" });
             }
-            string messageResult = JsonConvert.SerializeObject(result, Formatting.Indented);
-            if (IsOneFailed == false)
-                return req.CreateResponse(HttpStatusCode.OK, messageResult);             
-            else
-                return req.CreateResponse(HttpStatusCode.InternalServerError, messageResult);
+            return result;
         }
 
         private static async Task<Uri> RunProcessModelAsync(ProcessModel processQuery, ILogger log)
@@ -261,7 +302,8 @@ namespace SSASUtils
                     return retWarn;
                 }
             }
-            catch (Exception e){
+            catch (Exception e)
+            {
                 log.LogError(e.Message);
                 return null;
             }
@@ -302,7 +344,7 @@ namespace SSASUtils
             }
         }
 
-        private static async Task<KeyValuePair<string,string>> CheckProcessStatusRestAPI(Uri location, ILogger log)
+        private static async Task<KeyValuePair<string, string>> CheckProcessStatusRestAPI(Uri location, ILogger log)
         {
             string output = "";
             HttpClient client = new HttpClient();
@@ -346,7 +388,7 @@ namespace SSASUtils
                 if (ex.CancellationToken.IsCancellationRequested)
                     log.LogWarning("CancellationToken.IsCancellationRequested is true for " + location.AbsoluteUri.ToString());
 
-                return new KeyValuePair<string, string>("RequestCancelled",ex.Message);
+                return new KeyValuePair<string, string>("RequestCancelled", ex.Message);
             }
         }
 
@@ -370,7 +412,7 @@ namespace SSASUtils
                 client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
                 client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", TokenCredentials);
 
-                string urlrest = "https://management.azure.com/subscriptions/"+ Settings.SubscriptionId + "/resourceGroups/" + resourceGroup + "/providers/Microsoft.AnalysisServices/servers/" + servername + "?api-version=2017-08-01";
+                string urlrest = "https://management.azure.com/subscriptions/" + Settings.SubscriptionId + "/resourceGroups/" + resourceGroup + "/providers/Microsoft.AnalysisServices/servers/" + servername + "?api-version=2017-08-01";
 
                 client.BaseAddress = new Uri(urlrest);
 
@@ -438,7 +480,7 @@ namespace SSASUtils
                 else
                 {
                     log.LogWarning("response.IsSuccessStatusCode is false for " + location.AbsoluteUri.ToString());
-                    return new KeyValuePair<string, string>(null,null);
+                    return new KeyValuePair<string, string>(null, null);
                 }
 
                 JObject obj = JObject.Parse(output);
@@ -462,11 +504,11 @@ namespace SSASUtils
                         Uri newURI = new Uri(location.AbsoluteUri.Substring(0, location.AbsoluteUri.LastIndexOf("?")));
                         System.Threading.Thread.Sleep(60000);
                         return await CheckSyncStatusRestAPI(newURI, log, true);
-                    }             
+                    }
                 }
                 else if (returnStatus == 2)
-                    return new KeyValuePair<string, string>("succeeded",null);
-                else return new KeyValuePair<string, string>("inProgress",null);
+                    return new KeyValuePair<string, string>("succeeded", null);
+                else return new KeyValuePair<string, string>("inProgress", null);
                 //succeeded
                 //inProgress
             }
