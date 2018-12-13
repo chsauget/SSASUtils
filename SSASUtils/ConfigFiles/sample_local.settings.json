@@ -4,12 +4,12 @@
     "AzureWebJobsStorage": "UseDevelopmentStorage=true",
     "AzureWebJobsDashboard": "UseDevelopmentStorage=true"
   },
-  "SubscriptionId": "574e709e-3c92-4ee4-a805-2bac8206620a",
+  "SubscriptionId": "",
   "AzureAd": {
     "ResourceURI": "https://northeurope.asazure.windows.net",
     "ResourceManagementURI": "https://management.core.windows.net",
     "Authority": "https://login.windows.net/b2ed466b-1ad5-4ea5-b19e-10f2abc41e7c",
-    "ClientId": "d1396ccb-0e89-4179-b9bf-d249a7636b98",
-    "AppSecret": "4+BT8TguqGGU4bmvparccua/O2vaRPD6INsnqJGI11U="
+    "ClientId": "",
+    "AppSecret": ""
   }
 }
