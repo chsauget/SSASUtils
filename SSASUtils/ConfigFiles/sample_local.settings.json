@@ -8,7 +8,7 @@
   "AzureAd": {
     "ResourceURI": "https://northeurope.asazure.windows.net",
     "ResourceManagementURI": "https://management.core.windows.net",
-    "Authority": "https://login.windows.net/b2ed466b-1ad5-4ea5-b19e-10f2abc41e7c",
+    "Authority": "",
     "ClientId": "",
     "AppSecret": ""
   }
