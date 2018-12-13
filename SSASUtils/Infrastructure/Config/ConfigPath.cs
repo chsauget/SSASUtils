@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace airliquideneubigazfbic001.Infrastructure.Config
+namespace SSASUtils.Infrastructure.Config
 {
     public static class ConfigPath
     {
