@@ -2,7 +2,8 @@
 {
 	using System;
 	using System.IO;
-	using Config;
+    using airliquideneubigazfbic001.Infrastructure.Config;
+    using Config;
 	using Microsoft.Extensions.Configuration;
 	using Microsoft.Extensions.DependencyInjection;
 
@@ -30,9 +31,9 @@
 		private static IConfigurationRoot GetConfiguration()
 		{
 			var config = new ConfigurationBuilder()
-						 .SetBasePath(Directory.GetCurrentDirectory())
-						 // you might want to change this, to your real config file.
-						 .AddJsonFile("ConfigFiles/sample_local.settings.json", true, true)
+                         .SetBasePath(ConfigPath.Path)
+                         // you might want to change this, to your real config file.
+                         .AddJsonFile("sample_local.settings.json", true, true)
 						 .AddEnvironmentVariables()
 						 .Build();
 
