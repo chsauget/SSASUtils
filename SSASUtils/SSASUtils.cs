@@ -24,7 +24,6 @@ namespace SSASUtils
     using System.Text;
     using System.IO;
     using System.Threading.Tasks;
-    using airliquideneubigazfbic001.Infrastructure.Config;
 
     public static class SSASUtils
     {
