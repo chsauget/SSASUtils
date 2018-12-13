@@ -82,9 +82,9 @@ namespace SSASUtils
         //    }
         //]
         [FunctionName("ProcessModel")]
-        public static async Task<HttpResponseMessage> RunProcessModel([HttpTrigger(AuthorizationLevel.Function,"post", Route = null)]HttpRequestMessage req, TraceWriter log)
+        public static async Task<HttpResponseMessage> RunProcessModel([HttpTrigger(AuthorizationLevel.Function,"post", Route = null)]HttpRequestMessage req, ILogger log)
         {
-            log.Info("C# HTTP trigger function processed a request.");
+            log.LogInformation("C# HTTP trigger function processed a request.");
             bool IsOneFailed = false;
             bool wait = true;
             List<ProcessModel> processQueryList = await req.Content.ReadAsAsync<List<ProcessModel>>();
@@ -100,7 +100,7 @@ namespace SSASUtils
                         await configureProcessingServer("ReadOnly", processQuery.resourceGroup, processQuery.serverUrl.Substring(processQuery.serverUrl.LastIndexOf("/")+1), log);
                     }
                     var processUri = await RunProcessModelAsync(processQuery, log);
-                    executionList.Add(new ProcessState { wait = true, processUri= processUri, conflic=false, hasError=false, serverUrl= processQuery.serverUrl, modelName= processQuery.modelName, syncReplicas = processQuery.SyncReplicas, resourceGroup = processQuery.resourceGroup });
+                    executionList.Add(new ProcessState { wait = true, processUri= processUri, conflic=false, hasError=false, process = processQuery });
                 }
                 
                 foreach(ProcessState process in executionList)
@@ -129,40 +129,41 @@ namespace SSASUtils
 
                     // For each process 
 
-                    foreach (var process in executionList.Where(p => p.wait == true))
+                    foreach (var proc in executionList.Where(p => p.wait == true))
                     {
-                        var output = await CheckProcessStatusRestAPI(process.processUri, log);
+                        var output = await CheckProcessStatusRestAPI(proc.processUri, log);
                         if (output.Key == "succeeded")
                         {
-                            process.wait = false;
-                            log.Info(string.Format("Cube {0}/{1} Processing End", process.serverUrl, process.modelName));
+                            proc.wait = false;
+                            log.LogInformation(string.Format("Cube {0}/{1} Processing End", proc.process.serverUrl, proc.process.modelName));
                             //UpdateMessage(logIdFinance, 20, string.Empty, 0);
 
                             // IF is this server is replicated ==> Sync other DB
-                            if (process.syncReplicas)
+                            if (proc.process.SyncReplicas)
                             {
-                                await configureProcessingServer("All", process.resourceGroup, process.serverUrl.Substring(process.serverUrl.LastIndexOf("/") + 1), log);
+                                await configureProcessingServer("All", proc.process.resourceGroup, proc.process.serverUrl.Substring(proc.process.serverUrl.LastIndexOf("/") + 1), log);
                                 //logIdsyncFinance = LogMessage(ExecutionNumber, 10, 202);
 
                                 SyncState state = new SyncState();
-                                state.syncUri = await SyncRestAPI(process.serverUrl, process.modelName, log);
+                                state.syncUri = await SyncRestAPI(proc.process.serverUrl, proc.process.modelName, log);
                                 state.syncWait = true;
+                                state.process = proc.process;
                                 syncList.Add(state);
                             }
                         }
                         else if (output.Key == "failed" || output.Key == "cancelled")
                         {
-                            process.wait = false;
-                            process.hasError = true;
-                            process.errorMessage = string.Format("{0} - {1} Cube Processing Failed", process.serverUrl, output.Value);
-                            log.Error(process.errorMessage);
+                            proc.wait = false;
+                            proc.hasError = true;
+                            proc.errorMessage = string.Format("{0} - {1} Cube Processing Failed", proc.process.serverUrl, output.Value);
+                            log.LogError(proc.errorMessage);
                             //UpdateMessage(logIdFinance, 30, "Process Failed", 0);
 
                             IsOneFailed = true;
 
-                            if (process.syncReplicas)
+                            if (proc.process.SyncReplicas)
                             {
-                                await configureProcessingServer("All", process.resourceGroup, process.serverUrl.Substring(process.serverUrl.LastIndexOf("/") + 1), log);
+                                await configureProcessingServer("All", proc.process.resourceGroup, proc.process.serverUrl.Substring(proc.process.serverUrl.LastIndexOf("/") + 1), log);
                             }
                         }
                     }
@@ -178,15 +179,16 @@ namespace SSASUtils
                     foreach (SyncState syncState in syncList)
                     {
                         var output = await CheckSyncStatusRestAPI(syncState.syncUri, log);
-                        if (output == "succeeded")
+                        if (output.Key == "succeeded")
                         {
                             syncState.syncWait = false;
-                            log.Info(String.Format("{0} Cube synchronization End", syncState.modelName));
+                            log.LogInformation(String.Format("{0} Cube synchronization End", syncState.process.modelName));
                         }
-                        else if (output == "failed")
+                        else if (output.Key == "failed")
                         {
                             syncState.syncWait = false;
-                            log.Error(String.Format("{0} Cube synchronization Failed", syncState.modelName));
+                            syncState.errorMessage = output.Value;
+                            log.LogError(String.Format("{0} Cube synchronization Failed", syncState.process.modelName));
                             syncState.hasError = true;
                         }
                     }
@@ -196,7 +198,7 @@ namespace SSASUtils
             catch (Exception e)
             {
                 string message = e.Message.Substring(1, e.Message.Length <= 500 ? e.Message.Length - 1 : 500);
-                log.Error($"Exception: {message} - {e.Source} - {e.InnerException}");
+                log.LogError($"Exception: {message} - {e.Source} - {e.InnerException}");
                 IsOneFailed = true;
             }
 
@@ -204,20 +206,28 @@ namespace SSASUtils
             foreach (var p in executionList)
             {
                 if (p.hasError)
-                    result.Add(new ProcessResult { serverUrl = p.serverUrl, modelName = p.modelName, State = "Error", errorMessage = p.errorMessage });
+                    result.Add(new ProcessResult { serverUrl = p.process.serverUrl, modelName = p.process.modelName, State = "Error", errorMessage = p.errorMessage });
                 else if (p.conflic)
-                    result.Add(new ProcessResult { serverUrl = p.serverUrl, modelName = p.modelName, State = "Already processing => Conflict" });
-                else 
-                    result.Add(new ProcessResult { serverUrl = p.serverUrl, modelName = p.modelName, State = "Succeded" });
+                    result.Add(new ProcessResult { serverUrl = p.process.serverUrl, modelName = p.process.modelName, State = "Already processing => Conflict" });
+                else if (p.process.SyncReplicas)
+                {
+                    var syncState = syncList.First(s => s.process == p.process);
+                    if (syncState.hasError)
+                        result.Add(new ProcessResult { serverUrl = p.process.serverUrl, modelName = p.process.modelName, State = "Succeded", syncState="Synchronisation Error", errorMessage=syncState.errorMessage });
+                    else
+                        result.Add(new ProcessResult { serverUrl = p.process.serverUrl, modelName = p.process.modelName, State = "Succeded", syncState = "Synchronisation Succeded" });
+                }
+                else
+                    result.Add(new ProcessResult { serverUrl = p.process.serverUrl, modelName = p.process.modelName, State = "Succeded" });
             }
-            string messageResult = JsonConvert.SerializeObject(result);
+            string messageResult = JsonConvert.SerializeObject(result, Formatting.Indented);
             if (IsOneFailed == false)
                 return req.CreateResponse(HttpStatusCode.OK, messageResult);             
             else
                 return req.CreateResponse(HttpStatusCode.InternalServerError, messageResult);
         }
 
-        private static async Task<Uri> RunProcessModelAsync(ProcessModel processQuery, TraceWriter log)
+        private static async Task<Uri> RunProcessModelAsync(ProcessModel processQuery, ILogger log)
         {
             try
             {
@@ -227,35 +237,37 @@ namespace SSASUtils
                 client.DefaultRequestHeaders.Accept.Clear();
                 client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
                 client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", TokenCredentials);
-
+                //var json = JsonConvert.SerializeObject(processQuery.refreshRequest, new JsonSerializerSettings() {
+                //                                                NullValueHandling = NullValueHandling.Ignore                                                        
+                //                                         });
                 HttpResponseMessage response = await client.PostAsJsonAsync("refreshes", processQuery.refreshRequest);
 
                 if (response.StatusCode == HttpStatusCode.Conflict)
                 {
-                    log.Warning("Process already in progress !!!");
+                    log.LogWarning("Process already in progress !!!");
                     Uri retWarn = new Uri("https://InProgress");
                     return retWarn;
                 }
                 else if (response.StatusCode == HttpStatusCode.OK || response.StatusCode == HttpStatusCode.Accepted)
                 {
                     Uri location = response.Headers.Location;
-                    log.Info(location.OriginalString);
+                    log.LogInformation(location.OriginalString);
                     return location;
                 }
                 else
                 {
-                    log.Error("Request not completed : StatusCode " + response.StatusCode + ", Reason " + response.ReasonPhrase + " !!!");
+                    log.LogError("Request not completed : StatusCode " + response.StatusCode + ", Reason " + response.ReasonPhrase + " !!!");
                     Uri retWarn = new Uri("https://Error");
                     return retWarn;
                 }
             }
             catch (Exception e){
-                log.Error(e.Message);
+                log.LogError(e.Message);
                 return null;
             }
         }
 
-        public static async Task<Uri> SyncRestAPI(string serverName, string modelName, TraceWriter log)
+        public static async Task<Uri> SyncRestAPI(string serverName, string modelName, ILogger log)
         {
             HttpClient client = new HttpClient();
             client.BaseAddress = UtilityHelper.ServerNameToUri(serverName, modelName);
@@ -267,30 +279,30 @@ namespace SSASUtils
 
             try
             {
-                log.Info(string.Format("Start Process for {0} on {1}", modelName, serverName));
+                log.LogInformation(string.Format("Start Process for {0} on {1}", modelName, serverName));
                 HttpResponseMessage response = await client.PostAsync("sync", null);
 
                 if (response.StatusCode == HttpStatusCode.OK || response.StatusCode == HttpStatusCode.Accepted)
                 {
                     Uri location = response.Headers.Location;
-                    log.Info(location.OriginalString);
+                    log.LogInformation(location.OriginalString);
                     return location;
                 }
                 else
                 {
-                    log.Error("Request not completed : StatusCode " + response.StatusCode + ", Reason " + response.ReasonPhrase + " !!!");
+                    log.LogError("Request not completed : StatusCode " + response.StatusCode + ", Reason " + response.ReasonPhrase + " !!!");
                     Uri retWarn = new Uri("https://Error");
                     return retWarn;
                 }
             }
             catch (Exception e)
             {
-                log.Error(e.Message);
+                log.LogError(e.Message);
                 return null;
             }
         }
 
-        private static async Task<KeyValuePair<string,string>> CheckProcessStatusRestAPI(Uri location, TraceWriter log)
+        private static async Task<KeyValuePair<string,string>> CheckProcessStatusRestAPI(Uri location, ILogger log)
         {
             string output = "";
             HttpClient client = new HttpClient();
@@ -308,7 +320,7 @@ namespace SSASUtils
                 }
                 else
                 {
-                    log.Warning("response.IsSuccessStatusCode is false for " + location.AbsoluteUri.ToString());
+                    log.LogWarning("response.IsSuccessStatusCode is false for " + location.AbsoluteUri.ToString());
                     return new KeyValuePair<string, string>(null, null);
                 }
 
@@ -318,8 +330,9 @@ namespace SSASUtils
 
                 if (returnStatus == "failed" || returnStatus == "cancelled")
                 {
-                    error = obj.GetValue("messages").ToString();
-                    log.Error("Process Error Messages: " + obj.GetValue("messages").ToString());
+                    error = obj.SelectTokens("messages[0].message").ToArray()[0].ToString();
+                    //error = obj.GetValue("messages").ToString();
+                    log.LogError("Process Error Messages: " + obj.GetValue("messages").ToString());
                 }
                 return new KeyValuePair<string, string>(returnStatus, error);
                 //succeeded
@@ -327,11 +340,11 @@ namespace SSASUtils
             }
             catch (TaskCanceledException ex)
             {
-                log.Warning("TaskCanceledException occured for " + location.AbsoluteUri.ToString());
+                log.LogWarning("TaskCanceledException occured for " + location.AbsoluteUri.ToString());
                 // Check ex.CancellationToken.IsCancellationRequested here.
                 // If false, it's pretty safe to assume it was a timeout.
                 if (ex.CancellationToken.IsCancellationRequested)
-                    log.Warning("CancellationToken.IsCancellationRequested is true for " + location.AbsoluteUri.ToString());
+                    log.LogWarning("CancellationToken.IsCancellationRequested is true for " + location.AbsoluteUri.ToString());
 
                 return new KeyValuePair<string, string>("RequestCancelled",ex.Message);
             }
@@ -345,9 +358,9 @@ namespace SSASUtils
         /// <param name="servername">Name of the AAS instance</param>
         /// <param name="log"></param>
         /// <returns></returns>
-        private static async Task configureProcessingServer(string queryPoolMode, string resourceGroup, string servername, TraceWriter log)
+        private static async Task configureProcessingServer(string queryPoolMode, string resourceGroup, string servername, ILogger log)
         {
-            log.Info("Start to configure querypoolConnectionMode to " + queryPoolMode + " for " + servername);
+            log.LogInformation("Start to configure querypoolConnectionMode to " + queryPoolMode + " for " + servername);
             string output = "";
             HttpClient client = new HttpClient();
             try
@@ -382,11 +395,11 @@ namespace SSASUtils
                 if (response.IsSuccessStatusCode)
                 {
                     output = await response.Content.ReadAsStringAsync();
-                    //  log.Info(output);
+                    //  log.LogInformation(output);
                 }
                 else
                 {
-                    log.Warning("response.IsSuccessStatusCode is false for " + servername);
+                    log.LogWarning("response.IsSuccessStatusCode is false for " + servername);
                 }
 
                 Thread.Sleep(5000);
@@ -394,19 +407,19 @@ namespace SSASUtils
             }
             catch (TaskCanceledException ex)
             {
-                log.Warning("TaskCanceledException occured for " + servername);
+                log.LogWarning("TaskCanceledException occured for " + servername);
                 // Check ex.CancellationToken.IsCancellationRequested here.
                 // If false, it's pretty safe to assume it was a timeout.
                 if (ex.CancellationToken.IsCancellationRequested)
-                    log.Warning("CancellationToken.IsCancellationRequested is true for " + servername);
+                    log.LogWarning("CancellationToken.IsCancellationRequested is true for " + servername);
             }
             catch (Exception e)
             {
-                log.Error("QueryPool Error" + e.Message);
+                log.LogError("QueryPool Error" + e.Message);
             }
         }
 
-        private static async Task<string> CheckSyncStatusRestAPI(Uri location, TraceWriter log, bool retry = false)
+        private static async Task<KeyValuePair<string, string>> CheckSyncStatusRestAPI(Uri location, ILogger log, bool retry = false)
         {
             string output = "";
             HttpClient client = new HttpClient();
@@ -424,8 +437,8 @@ namespace SSASUtils
                 }
                 else
                 {
-                    log.Warning("response.IsSuccessStatusCode is false for " + location.AbsoluteUri.ToString());
-                    return null;
+                    log.LogWarning("response.IsSuccessStatusCode is false for " + location.AbsoluteUri.ToString());
+                    return new KeyValuePair<string, string>(null,null);
                 }
 
                 JObject obj = JObject.Parse(output);
@@ -440,9 +453,9 @@ namespace SSASUtils
 
                 if (returnStatus == 3)
                 {
-                    log.Error("Process Error  Messages: " + obj.GetValue("details").ToString());
+                    log.LogError("Process Error  Messages: " + obj.GetValue("details").ToString());
                     if (retry)
-                        return "failed";
+                        return new KeyValuePair<string, string>("failed", obj.GetValue("details").ToString());
                     else
                     {
                         // i sync status = false => wait 1 minute and check with url without operationId
@@ -452,65 +465,25 @@ namespace SSASUtils
                     }             
                 }
                 else if (returnStatus == 2)
-                    return "succeeded";
-                else return "inProgress";
+                    return new KeyValuePair<string, string>("succeeded",null);
+                else return new KeyValuePair<string, string>("inProgress",null);
                 //succeeded
                 //inProgress
             }
             catch (TaskCanceledException ex)
             {
-                log.Warning("TaskCanceledException occured for " + location.AbsoluteUri.ToString());
+                log.LogWarning("TaskCanceledException occured for " + location.AbsoluteUri.ToString());
                 // Check ex.CancellationToken.IsCancellationRequested here.
                 // If false, it's pretty safe to assume it was a timeout.
                 if (ex.CancellationToken.IsCancellationRequested)
                 {
-                    log.Warning("CancellationToken.IsCancellationRequested is true for " + location.AbsoluteUri.ToString());
+                    log.LogWarning("CancellationToken.IsCancellationRequested is true for " + location.AbsoluteUri.ToString());
                 }
-                return "RequestCancelled";
+                return new KeyValuePair<string, string>("RequestCancelled", ex.Message);
             }
         }
 
 
     }
 
-    class ProcessState
-    {
-        public string serverUrl { get; set; }
-        public string modelName { get; set; }
-        public string resourceGroup { get; set; }
-        public bool syncReplicas { get; set; }
-        public bool wait { get; set; }
-        public Uri processUri { get; set; }
-        public bool conflic { get; set; }
-        public bool hasError { get; set; }
-        public string errorMessage { get; set; }
-    }
-
-    class SyncState {
-        public string serverUrl { get; set; }
-        public string modelName { get; set; }
-        public bool syncWait { get; set; }
-        public Uri syncUri { get; set; }
-        public bool hasError { get; set; }
-        public string errorMessage { get; set; }
-    }
-
-
-    class ProcessResult {
-        public string serverUrl { get; set; }
-        public string modelName { get; set; }
-        public string State { get; set; }
-        public string errorMessage { get; set; }
-    }
-
-    //Class for configure the process server in the query pool
-    class UpdateRequest
-    {
-        public UpdateProperties properties { get; set; }
-    }
-
-    class UpdateProperties
-    {
-        public string querypoolConnectionMode { get; set; }
-    }
 }
