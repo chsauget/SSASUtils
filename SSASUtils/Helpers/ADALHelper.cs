@@ -1,6 +1,7 @@
 ﻿using Microsoft.IdentityModel.Clients.ActiveDirectory;
 using Microsoft.Rest;
 using System;
+using System.Configuration;
 using System.Threading.Tasks;
 
 namespace SSASUtils.Helpers
@@ -26,6 +27,5 @@ namespace SSASUtils.Helpers
                 return authenticationResult.AccessToken;
             }
         }
-
     }
 }
