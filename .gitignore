@@ -4,3 +4,4 @@ MeteoSampleModel/bin
 MeteoSampleModel/obj
 MeteoSampleModel/Model.bim.layout
 MeteoSampleModel/Model.bim_Charles-HenriSauget.settings
+"*.settings.json" 
